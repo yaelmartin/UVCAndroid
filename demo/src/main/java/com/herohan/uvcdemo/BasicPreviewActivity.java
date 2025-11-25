@@ -30,8 +30,8 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
     private ICameraHelper mCameraHelper;
     private AspectRatioSurfaceView mCameraViewMain;
 
-    // Streaming server
-    private ThermalStreamServer streamServer;
+    // WebSocket streaming server
+    private ThermalWebSocketServer webSocketServer;
     private Button btnStartStream;
     private Button btnStopStream;
 
@@ -42,7 +42,7 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
         setTitle(R.string.entry_basic_preview);
 
         initViews();
-        initStreamServer();
+        initWebSocketServer();
     }
 
     private void initViews() {
@@ -75,7 +75,7 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
         Button btnCloseCamera = findViewById(R.id.btnCloseCamera);
         btnCloseCamera.setOnClickListener(this);
 
-        // Add stream control buttons (use existing buttons or add new ones in your layout)
+        // Stream control buttons
         btnStartStream = findViewById(R.id.btnStartStream);
         if (btnStartStream != null) {
             btnStartStream.setOnClickListener(this);
@@ -86,18 +86,18 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
         }
     }
 
-    private void initStreamServer() {
-        streamServer = new ThermalStreamServer(new ThermalStreamServer.StreamCallback() {
+    private void initWebSocketServer() {
+        webSocketServer = new ThermalWebSocketServer(new ThermalWebSocketServer.StreamCallback() {
             @Override
             public void onServerStarted(String url) {
                 runOnUiThread(() -> {
                     Toast.makeText(BasicPreviewActivity.this,
-                            "Stream available at:\n" + url,
+                            "WebSocket Server Started!\n" + url,
                             Toast.LENGTH_LONG).show();
-                    Log.i(TAG, "Stream URL: " + url);
+                    Log.i(TAG, "WebSocket URL: " + url);
 
-                    if (btnStartStream != null) btnStartStream.setEnabled(false);
-                    if (btnStopStream != null) btnStopStream.setEnabled(true);
+                    if (btnStartStream != null) btnStartStream.setEnabled(true);
+                    if (btnStopStream != null) btnStopStream.setEnabled(false);
                 });
             }
 
@@ -105,25 +105,40 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
             public void onServerError(String error) {
                 runOnUiThread(() -> {
                     Toast.makeText(BasicPreviewActivity.this,
-                            "Stream error: " + error,
+                            "WebSocket Error: " + error,
                             Toast.LENGTH_SHORT).show();
+                    Log.e(TAG, "WebSocket Error: " + error);
                 });
             }
 
             @Override
             public void onClientConnected(int clientCount) {
                 runOnUiThread(() -> {
-                    Log.i(TAG, "Clients connected: " + clientCount);
+                    String msg = "Client connected! Total: " + clientCount;
+                    Toast.makeText(BasicPreviewActivity.this, msg, Toast.LENGTH_SHORT).show();
+                    Log.i(TAG, msg);
                 });
             }
 
             @Override
             public void onClientDisconnected(int clientCount) {
                 runOnUiThread(() -> {
-                    Log.i(TAG, "Clients connected: " + clientCount);
+                    String msg = "Client disconnected. Remaining: " + clientCount;
+                    Toast.makeText(BasicPreviewActivity.this, msg, Toast.LENGTH_SHORT).show();
+                    Log.i(TAG, msg);
                 });
             }
         });
+
+        // Start the WebSocket server
+        try {
+            webSocketServer.start();
+            Log.i(TAG, "WebSocket server starting...");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start WebSocket server", e);
+            Toast.makeText(this, "Failed to start WebSocket server: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override
@@ -137,6 +152,13 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
         super.onStop();
         stopStreaming();
         clearCameraHelper();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopStreaming();
+        shutdownWebSocketServer();
     }
 
     public void initCameraHelper() {
@@ -166,23 +188,42 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
             return;
         }
 
-        if (streamServer.isRunning()) {
-            Toast.makeText(this, "Stream already running", Toast.LENGTH_SHORT).show();
+        if (webSocketServer == null) {
+            Toast.makeText(this, "WebSocket server not initialized", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        // Set frame callback to capture raw YUV data
-        mCameraHelper.setFrameCallback(streamServer.getFrameCallback(), UVCCamera.PIXEL_FORMAT_YUV422SP);
+        if (webSocketServer.isStreaming()) {
+            Toast.makeText(this, "Already streaming", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
-        // Start the HTTP server
-        streamServer.start();
+        try {
+            // Set frame callback to capture raw YUV data
+            mCameraHelper.setFrameCallback(
+                    webSocketServer.getFrameCallback(),
+                    UVCCamera.PIXEL_FORMAT_YUV
+            );
 
-        Log.i(TAG, "Streaming started");
+            // Start streaming frames to connected clients
+            webSocketServer.startStreaming();
+
+            if (btnStartStream != null) btnStartStream.setEnabled(false);
+            if (btnStopStream != null) btnStopStream.setEnabled(true);
+
+            Toast.makeText(this, "Streaming started! Clients can connect now.", Toast.LENGTH_SHORT).show();
+            Log.i(TAG, "WebSocket streaming started");
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start streaming", e);
+            Toast.makeText(this, "Failed to start streaming: " + e.getMessage(),
+                    Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void stopStreaming() {
-        if (streamServer != null && streamServer.isRunning()) {
-            streamServer.stop();
+        if (webSocketServer != null && webSocketServer.isStreaming()) {
+            webSocketServer.stopStreaming();
 
             // Remove frame callback
             if (mCameraHelper != null) {
@@ -195,7 +236,19 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
                 Toast.makeText(this, "Streaming stopped", Toast.LENGTH_SHORT).show();
             });
 
-            Log.i(TAG, "Streaming stopped");
+            Log.i(TAG, "WebSocket streaming stopped");
+        }
+    }
+
+    private void shutdownWebSocketServer() {
+        if (webSocketServer != null) {
+            try {
+                webSocketServer.shutdown();
+                webSocketServer = null;
+                Log.i(TAG, "WebSocket server shutdown");
+            } catch (Exception e) {
+                Log.e(TAG, "Error shutting down WebSocket server", e);
+            }
         }
     }
 
@@ -280,11 +333,5 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
         } else if (id == R.id.btnStopStream) {
             stopStreaming();
         }
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        stopStreaming();
     }
 }
