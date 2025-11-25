@@ -6,6 +6,7 @@ import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.View;
 import android.widget.Button;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -13,6 +14,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.herohan.uvcapp.CameraHelper;
 import com.herohan.uvcapp.ICameraHelper;
 import com.serenegiant.usb.Size;
+import com.serenegiant.usb.UVCCamera;
 import com.serenegiant.widget.AspectRatioSurfaceView;
 
 import java.util.List;
@@ -26,8 +28,12 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
     private static final int DEFAULT_HEIGHT = 480;
 
     private ICameraHelper mCameraHelper;
-
     private AspectRatioSurfaceView mCameraViewMain;
+
+    // Streaming server
+    private ThermalStreamServer streamServer;
+    private Button btnStartStream;
+    private Button btnStopStream;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -36,6 +42,7 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
         setTitle(R.string.entry_basic_preview);
 
         initViews();
+        initStreamServer();
     }
 
     private void initViews() {
@@ -67,6 +74,56 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
         btnOpenCamera.setOnClickListener(this);
         Button btnCloseCamera = findViewById(R.id.btnCloseCamera);
         btnCloseCamera.setOnClickListener(this);
+
+        // Add stream control buttons (use existing buttons or add new ones in your layout)
+        btnStartStream = findViewById(R.id.btnStartStream);
+        if (btnStartStream != null) {
+            btnStartStream.setOnClickListener(this);
+        }
+        btnStopStream = findViewById(R.id.btnStopStream);
+        if (btnStopStream != null) {
+            btnStopStream.setOnClickListener(this);
+        }
+    }
+
+    private void initStreamServer() {
+        streamServer = new ThermalStreamServer(new ThermalStreamServer.StreamCallback() {
+            @Override
+            public void onServerStarted(String url) {
+                runOnUiThread(() -> {
+                    Toast.makeText(BasicPreviewActivity.this,
+                            "Stream available at:\n" + url,
+                            Toast.LENGTH_LONG).show();
+                    Log.i(TAG, "Stream URL: " + url);
+
+                    if (btnStartStream != null) btnStartStream.setEnabled(false);
+                    if (btnStopStream != null) btnStopStream.setEnabled(true);
+                });
+            }
+
+            @Override
+            public void onServerError(String error) {
+                runOnUiThread(() -> {
+                    Toast.makeText(BasicPreviewActivity.this,
+                            "Stream error: " + error,
+                            Toast.LENGTH_SHORT).show();
+                });
+            }
+
+            @Override
+            public void onClientConnected(int clientCount) {
+                runOnUiThread(() -> {
+                    Log.i(TAG, "Clients connected: " + clientCount);
+                });
+            }
+
+            @Override
+            public void onClientDisconnected(int clientCount) {
+                runOnUiThread(() -> {
+                    Log.i(TAG, "Clients connected: " + clientCount);
+                });
+            }
+        });
     }
 
     @Override
@@ -78,6 +135,7 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
     @Override
     protected void onStop() {
         super.onStop();
+        stopStreaming();
         clearCameraHelper();
     }
 
@@ -100,6 +158,45 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
     private void selectDevice(final UsbDevice device) {
         if (DEBUG) Log.v(TAG, "selectDevice:device=" + device.getDeviceName());
         mCameraHelper.selectDevice(device);
+    }
+
+    private void startStreaming() {
+        if (mCameraHelper == null) {
+            Toast.makeText(this, "Open camera first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (streamServer.isRunning()) {
+            Toast.makeText(this, "Stream already running", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // Set frame callback to capture raw YUV data
+        mCameraHelper.setFrameCallback(streamServer.getFrameCallback(), UVCCamera.PIXEL_FORMAT_YUV422SP);
+
+        // Start the HTTP server
+        streamServer.start();
+
+        Log.i(TAG, "Streaming started");
+    }
+
+    private void stopStreaming() {
+        if (streamServer != null && streamServer.isRunning()) {
+            streamServer.stop();
+
+            // Remove frame callback
+            if (mCameraHelper != null) {
+                mCameraHelper.setFrameCallback(null, 0);
+            }
+
+            runOnUiThread(() -> {
+                if (btnStartStream != null) btnStartStream.setEnabled(true);
+                if (btnStopStream != null) btnStopStream.setEnabled(false);
+                Toast.makeText(this, "Streaming stopped", Toast.LENGTH_SHORT).show();
+            });
+
+            Log.i(TAG, "Streaming stopped");
+        }
     }
 
     private final ICameraHelper.StateCallback mStateListener = new ICameraHelper.StateCallback() {
@@ -139,6 +236,9 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
             if (mCameraHelper != null) {
                 mCameraHelper.removeSurface(mCameraViewMain.getHolder().getSurface());
             }
+
+            // Stop streaming when camera closes
+            stopStreaming();
         }
 
         @Override
@@ -160,7 +260,9 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
 
     @Override
     public void onClick(View v) {
-        if (v.getId() == R.id.btnOpenCamera) {
+        int id = v.getId();
+
+        if (id == R.id.btnOpenCamera) {
             // select a uvc device
             if (mCameraHelper != null) {
                 final List<UsbDevice> list = mCameraHelper.getDeviceList();
@@ -168,11 +270,21 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
                     mCameraHelper.selectDevice(list.get(0));
                 }
             }
-        } else if (v.getId() == R.id.btnCloseCamera) {
+        } else if (id == R.id.btnCloseCamera) {
             // close camera
             if (mCameraHelper != null) {
                 mCameraHelper.closeCamera();
             }
+        } else if (id == R.id.btnStartStream) {
+            startStreaming();
+        } else if (id == R.id.btnStopStream) {
+            stopStreaming();
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopStreaming();
     }
 }
