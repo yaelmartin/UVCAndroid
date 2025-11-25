@@ -31,8 +31,8 @@ task clean(type: Delete) {
 }
 
 ext {
-    versionCompiler = 34
-    versionTarget = 34
+    versionCompiler = 27
+    versionTarget = 27
     versionMin = 21
 
     javaSourceCompatibility = JavaVersion.VERSION_1_8
