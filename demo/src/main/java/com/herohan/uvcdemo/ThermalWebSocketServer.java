@@ -18,11 +18,10 @@ import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
  * WebSocket server for streaming raw YUV422 thermal camera data
- * Clients connect to: ws://[device-ip]:8888/thermal
  */
 public class ThermalWebSocketServer extends WebSocketServer {
     private static final String TAG = "ThermalWebSocketServer";
-    private static final int PORT = 8888;
+    private static final int PORT = 8080;
 
     // Thermal camera dimensions
     private static final int FRAME_WIDTH = 256;
@@ -47,13 +46,15 @@ public class ThermalWebSocketServer extends WebSocketServer {
     }
 
     public ThermalWebSocketServer(StreamCallback callback) {
-        super(new InetSocketAddress(PORT));
+        super(new InetSocketAddress("0.0.0.0", PORT));
         this.callback = callback;
         setReuseAddr(true);
+        setTcpNoDelay(true);
     }
 
     @Override
     public void onStart() {
+        // Get the actual port that was assigned
         String localIp = getLocalIpAddress();
         String url = "ws://" + localIp + ":" + PORT + "/thermal";
         Log.i(TAG, "✅ WebSocket Server started on " + url);
@@ -102,8 +103,8 @@ public class ThermalWebSocketServer extends WebSocketServer {
                 break;
             case "GET_INFO":
                 String info = String.format(
-                        "{\"type\":\"info\",\"width\":%d,\"height\":%d,\"format\":\"YUV422\",\"clients\":%d}",
-                        FRAME_WIDTH, FRAME_HEIGHT, clients.size()
+                        "{\"type\":\"info\",\"width\":%d,\"height\":%d,\"format\":\"YUV422\",\"clients\":%d,\"port\":%d}",
+                        FRAME_WIDTH, FRAME_HEIGHT, clients.size(), PORT
                 );
                 conn.send(info);
                 break;
@@ -295,7 +296,11 @@ public class ThermalWebSocketServer extends WebSocketServer {
             clients.clear();
 
             // Stop the server
-            stop(1000);
+            try {
+                stop(1000);
+            } catch (InterruptedException e) {
+                Log.w(TAG, "Interrupted while stopping server", e);
+            }
 
             Log.i(TAG, "Server shutdown complete");
         } catch (Exception e) {
