@@ -13,10 +13,13 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.herohan.uvcapp.CameraHelper;
 import com.herohan.uvcapp.ICameraHelper;
+import com.serenegiant.usb.IFrameCallback;
 import com.serenegiant.usb.Size;
 import com.serenegiant.usb.UVCCamera;
 import com.serenegiant.widget.AspectRatioSurfaceView;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.List;
 
 public class BasicPreviewActivity extends AppCompatActivity implements View.OnClickListener {
@@ -199,11 +202,39 @@ public class BasicPreviewActivity extends AppCompatActivity implements View.OnCl
         }
 
         try {
-            // Set frame callback to capture raw YUV data
-            mCameraHelper.setFrameCallback(
-                    webSocketServer.getFrameCallback(),
-                    UVCCamera.PIXEL_FORMAT_YUV
-            );
+            mCameraHelper.setFrameCallback(new IFrameCallback() {
+                @Override
+                public void onFrame(ByteBuffer frame) {
+
+                    final int fullWidth = 256;
+                    final int fullHeight = 384; // full camera frame
+                    final int cropHeight = 192; // bottom half
+                    final int width = 256;
+
+                    // allocate output buffer for 16-bit thermal values
+                    ByteBuffer thermalBuffer = ByteBuffer.allocate(width * cropHeight * 2);
+                    thermalBuffer.order(ByteOrder.LITTLE_ENDIAN);
+
+                    frame.rewind();
+
+                    // skip top half
+                    frame.position(width * (fullHeight - cropHeight) * 2); // 2 bytes per pixel
+
+                    for (int y = 0; y < cropHeight; y++) {
+                        for (int x = 0; x < width; x++) {
+                            short raw16 = frame.getShort();
+                            thermalBuffer.putShort(raw16);
+                        }
+                    }
+
+                    // send cropped bottom half to WebSocket
+                    if (webSocketServer.isStreaming()) {
+                        webSocketServer.broadcast(thermalBuffer.array());
+                    }
+                }
+            }, UVCCamera.PIXEL_FORMAT_RAW);
+
+
 
             // Start streaming frames to connected clients
             webSocketServer.startStreaming();
